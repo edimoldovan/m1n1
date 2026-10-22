@@ -190,7 +190,14 @@ static void smp_start_cpu(int index, const struct cpu_info *cpu)
 
     // Some kind of system level startup/status bit
     // Without this, IRQs don't work
-    write32(start_base + 0x4, 1 << (4 * cpu->cluster + cpu->core));
+    if (chip_id == T6050) {
+        /* T6050 (J714c): measured as a dense per-core held mask, one bit per CPU index,
+         * write-1-to-clear. The 4*cluster+core layout below never releases cores 14-17 on
+         * its three 6-core clusters. */
+        write32(start_base + 0x4, 1 << index);
+    } else {
+        write32(start_base + 0x4, 1 << (4 * cpu->cluster + cpu->core));
+    }
 
     // Actually start the core
     write32(start_base + 0x8 + 4 * cpu->cluster, 1 << cpu->core);
