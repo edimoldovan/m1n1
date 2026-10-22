@@ -2940,7 +2940,8 @@ int kboot_boot(void *kernel)
 
     usb_init();
     pcie_init();
-    dapf_init_all();
+    if (chip_id != T6050)
+        dapf_init_all();
 
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);
