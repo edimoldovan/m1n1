@@ -133,6 +133,39 @@ void run_actions(__maybe_unused u64 lp_sip0)
     uartproxy_run(NULL);
 }
 
+/*
+ * fbcrumb: J714c boot crumbs, white bands in the iBoot framebuffer, same
+ * geometry as linux-aurora's asm/fbcrumb.h. Band 20 before mmu_shutdown,
+ * band 21 right before the jump to the next stage. T6050 only. Each crumb
+ * also arms the WDT: the reset-to-proxy time tells the host the last
+ * milestone reached (none 20 s, band 20 at 40 s, band 21 at 60 s, kernel 80 s and up).
+ */
+#define FBCRUMB_BASE   0x11fd31e6880ULL
+#define FBCRUMB_STRIDE 0x2f40
+#define FBCRUMB_BYTES  (16 * FBCRUMB_STRIDE)
+#define CRUMB_RAM      0x10800000000ULL /* last milestone, read back over the proxy after the reset */
+#define CRUMB_MAGIC    0xC0FFEE0000000000ULL
+#define CRUMB_MARK     0x4D314E3100000000ULL /* m1n1 reached the handoff */
+
+static void fbcrumb(int band, u32 wdt_seconds)
+{
+    if (chip_id != T6050)
+        return;
+
+    if (band >= 0) {
+        volatile u64 *p = (volatile u64 *)(FBCRUMB_BASE + (u64)band * 60 * FBCRUMB_STRIDE);
+
+        for (size_t i = 0; i < FBCRUMB_BYTES / 8; i++)
+            p[i] = ~0ULL;
+        sysop("dsb sy");
+    }
+    write64(CRUMB_RAM, CRUMB_MAGIC | (band & 0xff));
+    write64(CRUMB_RAM + 8, CRUMB_MARK);
+    sysop("dsb sy");
+    if (wdt_seconds)
+        wdt_arm(wdt_seconds);
+}
+
 void m1n1_main(void)
 {
     u64 lp_sip0 = 0;
@@ -196,6 +229,7 @@ void m1n1_main(void)
     }
 
     printf("Preparing to run next stage at %p...\n", next_stage.entry);
+    fbcrumb(-1, 0);
 
     nvme_shutdown();
     exception_shutdown();
@@ -205,7 +239,9 @@ void m1n1_main(void)
 #ifdef USE_FB
     fb_shutdown(next_stage.restore_logo);
 #endif
+    fbcrumb(20, 0);
     mmu_shutdown();
+    fbcrumb(21, 0);
 #endif
 
     printf("Vectoring to next stage...\n");
