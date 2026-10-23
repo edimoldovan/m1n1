@@ -141,6 +141,10 @@ if rvbar != u.base:
     for cpu in u.adt["cpus"]:
         if cpu.state == "running":
             continue
+        if getattr(u.adt["/chosen"], "chip_id", None) == 0x6050:
+            # T6050 (J714c): cpu-impl-reg is locked from EL2; the write SErrors the running m1n1.
+            print(f"  {cpu.name}: skipped, RVBAR locked on T6050")
+            continue
         if u.adt["/chosen"].chip_id == 0x8142:
             # Host writes to a cold T8142 secondary's RVBAR can wedge CPU0.
             # Leave the cold cores and their reset vectors to the next stage.

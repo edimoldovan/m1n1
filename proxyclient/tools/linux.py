@@ -110,7 +110,13 @@ if args.u_boot:
 
 
 p.cpufreq_init()
-p.smp_start_secondaries()
+try:
+    p.smp_start_secondaries()
+except Exception as e:
+    if getattr(u.adt["/chosen"], "chip_id", None) != 0x6050:
+        raise
+    # T6050 (J714c): secondaries cannot be started yet; the kernel boots on the boot CPU with maxcpus=1.
+    print(f"smp_start_secondaries failed ({e.__class__.__name__}); continuing with the boot CPU only")
 
 if args.tso:
     print("Enabling TSO:")
