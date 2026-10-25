@@ -197,6 +197,7 @@ bool rtkit_send(rtkit_dev_t *rtk, const struct rtkit_message *msg)
     asc_msg.msg0 = msg->msg;
     asc_msg.msg1 = msg->ep;
 
+    printf("rtkit(%s): tx ep=%02x msg=%016lx\n", rtk->name, (unsigned)asc_msg.msg1, asc_msg.msg0);
     return asc_send(rtk->asc, &asc_msg);
 }
 
@@ -342,6 +343,7 @@ static bool rtkit_handle_buffer_request(rtkit_dev_t *rtk, struct rtkit_message *
     reply.msg0 |= FIELD_PREP(MSG_BUFFER_REQUEST_SIZE, n_4kpages);
     reply.msg0 |= FIELD_PREP(MSG_BUFFER_REQUEST_IOVA, bfr->dva | rtk->dva_base);
 
+    printf("rtkit(%s): tx ep=%02x msg=%016lx\n", rtk->name, (unsigned)reply.msg1, reply.msg0);
     if (!asc_send(rtk->asc, &reply)) {
         rtkit_printf("unable to send buffer reply\n");
         return false;
@@ -402,6 +404,7 @@ static bool rtkit_handle_oslog_request(rtkit_dev_t *rtk, struct rtkit_message *m
     reply.msg0 = FIELD_PREP(OSLOG_TYPE, OSLOG_TYPE_BUFFER_REQUEST);
     reply.msg0 |= FIELD_PREP(OSLOG_SIZE, sz);
     reply.msg0 |= FIELD_PREP(OSLOG_IOVA, bfr->dva >> 12);
+    printf("rtkit(%s): tx ep=%02x msg=%016lx\n", rtk->name, (unsigned)reply.msg1, reply.msg0);
     if (!asc_send(rtk->asc, &reply)) {
         rtkit_printf("unable to send oslog buffer reply\n");
         rtkit_free_buffer(rtk, bfr);
@@ -457,6 +460,7 @@ int rtkit_recv(rtkit_dev_t *rtk, struct rtkit_message *msg)
         return -1;
 
     while (asc_recv(rtk->asc, &asc_msg)) {
+        printf("rtkit(%s): rx ep=%02x msg=%016lx\n", rtk->name, (unsigned)asc_msg.msg1, asc_msg.msg0);
         if (asc_msg.msg1 >= 0x100) {
             rtkit_printf("WARNING: received message for invalid endpoint %x >= 0x100\n",
                          asc_msg.msg1);

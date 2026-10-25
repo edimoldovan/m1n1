@@ -240,6 +240,7 @@ bool asc_recv(asc_dev_t *asc, struct asc_message *msg)
 
     // printf("received msg: %lx %x\n", msg->msg0, msg->msg1);
 
+    if ((unsigned long)asc->cpu_base == 0x419600000) printf("asc(nvme): rx ep=%02x msg=%016lx\n", (unsigned)msg->msg1, msg->msg0);
     return true;
 }
 
@@ -262,6 +263,7 @@ bool asc_can_send(asc_dev_t *asc)
 
 bool asc_send(asc_dev_t *asc, const struct asc_message *msg)
 {
+    if ((unsigned long)asc->cpu_base == 0x419600000) printf("asc(nvme): tx ep=%02x msg=%016lx\n", (unsigned)msg->msg1, msg->msg0);
     if (asc->postoffice) {
         u64 timeout = timeout_calculate(200000);
         while (!asc_can_send(asc)) {
