@@ -504,12 +504,6 @@ setup_controller:
     write64_lo_hi(nvme_base + NVME_ASQ, (u64)adminq.cmds);
     write64_lo_hi(nvme_base + NVME_ACQ, (u64)adminq.cqes);
     write32(nvme_base + NVME_AQA, ((NVME_QUEUE_SIZE - 1) << 16) | (NVME_QUEUE_SIZE - 1));
-    printf("nvme: pre-enable CC=%x AQA=%x ASQ=%x:%x ACQ=%x:%x IOSQ=%x:%x IOCQ=%x:%x MAXPEND=%x LSQ=%x NVMMU_NUM=%x ASQ_TCB=%x:%x IOSQ_TCB=%x:%x\n",
-           read32(nvme_base + NVME_CC), read32(nvme_base + NVME_AQA), read32(nvme_base + NVME_ASQ + 4), read32(nvme_base + NVME_ASQ),
-           read32(nvme_base + NVME_ACQ + 4), read32(nvme_base + NVME_ACQ), read32(nvme_base + NVME_IOQ_CMDS + 4), read32(nvme_base + NVME_IOQ_CMDS),
-           read32(nvme_base + NVME_IOQ_CQES + 4), read32(nvme_base + NVME_IOQ_CQES), read32(nvme_base + NVME_MAX_PEND_CMDS_CTRL),
-           read32(nvme_base + NVME_LINEAR_SQ_CTRL), read32(nvmmu_base + NVMMU_NUM), read32(nvmmu_base + NVMMU_ASQ_BASE + 4),
-           read32(nvmmu_base + NVMMU_ASQ_BASE), read32(nvmmu_base + NVMMU_IOSQ_BASE + 4), read32(nvmmu_base + NVMMU_IOSQ_BASE));
     if (!nvme_ctrl_enable()) {
         printf("nvme: timeout while waiting for CSTS.RDY to be set\n");
         goto out_disable_ctrl;
