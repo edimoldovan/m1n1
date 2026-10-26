@@ -5996,8 +5996,17 @@ int kboot_set_chosen_u32s(const char *name, const u32 *vals, int n)
 {
     if (!dt)
         return -1;
-    /* The prepared tree is packed; reopen it over its whole buffer. */
-    if (fdt_open_into(dt, dt, dt_bufsize) < 0)
+    /*
+     * The prepared tree is packed; reopen it over its whole buffer from a
+     * copy (reopening in place needs twice the packed size).
+     */
+    void *packed = malloc(fdt_totalsize(dt));
+    if (!packed)
+        return -1;
+    memcpy(packed, dt, fdt_totalsize(dt));
+    int ret = fdt_open_into(packed, dt, dt_bufsize);
+    free(packed);
+    if (ret < 0)
         return -1;
     int node = fdt_path_offset(dt, "/chosen");
     if (node < 0)
