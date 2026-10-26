@@ -432,8 +432,8 @@ void usb_iodev_init(void)
  * SIG with the host bits (checked on silicon over the proxy, J714c), the
  * PHY running. The kernel's generic dwc3 driver does the controller part.
  */
-/* Per port: attempts, PORTSC0 after the prep, PORTSC0 right before the jump. */
-static u32 t6050_prep_rec[USB_IODEV_COUNT][3];
+/* Per port: attempts, PORTSC0 after the prep, PORTSC0 right before the jump, ms to CCS. */
+static u32 t6050_prep_rec[USB_IODEV_COUNT][4];
 
 static u32 t6050_portsc0(struct usb_drd_regs *usb_regs)
 {
@@ -441,7 +441,7 @@ static u32 t6050_portsc0(struct usb_drd_regs *usb_regs)
     return read32(usb_regs->drd_regs + 0x420);
 }
 
-static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs, dwc3_dev_t **devp)
+static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs, dwc3_dev_t **devp, u32 *ms)
 {
     /*
      * Exactly the sequence checked over the proxy on J714c: the port
@@ -475,7 +475,7 @@ static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs, dwc3_dev
     clear32(usb_regs->drd_regs + DWC3_GUSB2PHYCFG(0), DWC3_GUSB2PHYCFG_SUSPHY);
     clear32(usb_regs->drd_regs + DWC3_GUSB3PIPECTL(0), DWC3_GUSB3PIPECTL_SUSPHY);
     /* A plugged device shows up as PORTSC.CCS within a few ms of the flip. */
-    for (int i = 0; i < 300; i++) {
+    for (*ms = 0; *ms < 300; (*ms)++) {
         if (t6050_portsc0(usb_regs) & 1)
             return true;
         udelay(1000);
@@ -483,17 +483,16 @@ static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs, dwc3_dev
     return false;
 }
 
-void usb_t6050_host_prep(u32 proxy_port)
+void usb_t6050_host_prep(void)
 {
     if (chip_id != T6050)
         return;
+    /* Every port, the one with the proxy cable included: the proxy is over by now. */
     for (u32 idx = 0; idx < USB_IODEV_COUNT; idx++) {
         struct usb_drd_regs usb_regs;
-        if (idx == proxy_port)
-            continue;
         if (usb_drd_get_regs(idx, &usb_regs) < 0)
             continue;
-        u32 attempts = 0;
+        u32 attempts = 0, ms = 0;
         bool connected = false;
         /*
          * The flip loses the connection now and then; the retry tells how
@@ -503,15 +502,16 @@ void usb_t6050_host_prep(u32 proxy_port)
         while (attempts < 3 && !connected) {
             dwc3_dev_t *dev;
             attempts++;
-            connected = usb_t6050_host_flip(idx, &usb_regs, &dev);
+            connected = usb_t6050_host_flip(idx, &usb_regs, &dev, &ms);
             if (!connected && attempts < 3 && dev)
                 usb_dwc3_shutdown(dev);
         }
         t6050_prep_rec[idx][0] = attempts;
         t6050_prep_rec[idx][1] = t6050_portsc0(&usb_regs);
-        printf("USB%u: left in USB 2.0 host mode for the next stage (GCTL %#x, PORTSC %#x, %u attempt%s)\n",
+        t6050_prep_rec[idx][3] = ms;
+        printf("USB%u: left in USB 2.0 host mode for the next stage (GCTL %#x, PORTSC %#x, %u attempt%s, %u ms)\n",
                idx, read32(usb_regs.drd_regs + DWC3_GCTL), t6050_prep_rec[idx][1], attempts,
-               attempts == 1 ? "" : "s");
+               attempts == 1 ? "" : "s", ms);
     }
 }
 
@@ -525,7 +525,7 @@ void usb_t6050_host_record(void)
             continue;
         t6050_prep_rec[idx][2] = t6050_portsc0(&usb_regs);
     }
-    if (kboot_set_chosen_u32s("apple,t6050-usbprep", &t6050_prep_rec[0][0], USB_IODEV_COUNT * 3))
+    if (kboot_set_chosen_u32s("apple,t6050-usbprep", &t6050_prep_rec[0][0], USB_IODEV_COUNT * 4))
         printf("USB: could not record the host prep in the devicetree\n");
 }
 

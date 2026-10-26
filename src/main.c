@@ -334,12 +334,8 @@ next_stage:
     exception_shutdown();
 #ifndef BRINGUP
     if (chip_id != T8152) {
-        u32 proxy_port = USB_IODEV_COUNT;
-        for (u32 i = 0; i < USB_IODEV_COUNT; i++)
-            if (iodev_get_usage(IODEV_USB0 + i) & (USAGE_CONSOLE | USAGE_UARTPROXY))
-                proxy_port = i;
         usb_iodev_shutdown();
-        usb_t6050_host_prep(proxy_port);
+        usb_t6050_host_prep();
         /* Its firmware may still use memory the next stage will reuse. */
         if (display_shutdown(DCP_SLEEP_IF_EXTERNAL) < 0) {
             printf("Display handoff failed; returning to proxy\n");
