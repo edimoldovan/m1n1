@@ -5996,6 +5996,9 @@ int kboot_set_chosen_u32s(const char *name, const u32 *vals, int n)
 {
     if (!dt)
         return -1;
+    /* The prepared tree is packed; reopen it over its whole buffer. */
+    if (fdt_open_into(dt, dt, dt_bufsize) < 0)
+        return -1;
     int node = fdt_path_offset(dt, "/chosen");
     if (node < 0)
         return -1;
@@ -6004,7 +6007,7 @@ int kboot_set_chosen_u32s(const char *name, const u32 *vals, int n)
     for (int i = 0; i < n; i++)
         if (fdt_appendprop_u32(dt, node, name, vals[i]) < 0)
             return -1;
-    return 0;
+    return fdt_pack(dt);
 }
 
 int kboot_set_chosen(const char *name, const char *value)

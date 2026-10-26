@@ -519,7 +519,8 @@ void usb_t6050_host_record(void)
             continue;
         t6050_prep_rec[idx][2] = t6050_portsc0(&usb_regs);
     }
-    kboot_set_chosen_u32s("apple,t6050-usbprep", &t6050_prep_rec[0][0], USB_IODEV_COUNT * 3);
+    if (kboot_set_chosen_u32s("apple,t6050-usbprep", &t6050_prep_rec[0][0], USB_IODEV_COUNT * 3))
+        printf("USB: could not record the host prep in the devicetree\n");
 }
 
 void usb_iodev_shutdown(void)
