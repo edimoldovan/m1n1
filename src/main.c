@@ -346,6 +346,7 @@ next_stage:
             uartproxy_run(NULL);
             panic("Display handoff failed\n");
         }
+        usb_t6050_host_record();
     }
 #ifdef USE_FB
     fb_shutdown(next_stage.restore_logo);

@@ -5991,6 +5991,22 @@ void kboot_set_initrd(void *start, size_t size)
     initrd_size = size;
 }
 
+/* Writes a u32 array straight into the prepared tree's /chosen (after kboot_prepare_dt). */
+int kboot_set_chosen_u32s(const char *name, const u32 *vals, int n)
+{
+    if (!dt)
+        return -1;
+    int node = fdt_path_offset(dt, "/chosen");
+    if (node < 0)
+        return -1;
+    if (fdt_setprop(dt, node, name, NULL, 0) < 0)
+        return -1;
+    for (int i = 0; i < n; i++)
+        if (fdt_appendprop_u32(dt, node, name, vals[i]) < 0)
+            return -1;
+    return 0;
+}
+
 int kboot_set_chosen(const char *name, const char *value)
 {
     int i = 0;
