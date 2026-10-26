@@ -424,6 +424,58 @@ void usb_iodev_init(void)
     }
 }
 
+/*
+ * T6050 (M5 Pro/Max): the Type-C PHY is a new generation Linux cannot drive
+ * yet, but USB 2.0 needs only the small usb2phy block. Before the kernel
+ * starts, leave every port except the proxy's in USB 2.0 host mode: usb2phy
+ * SIG with the host bits (checked on silicon over the proxy, J714c), the
+ * PHY running. The kernel's generic dwc3 driver does the controller part.
+ */
+void usb_t6050_host_prep(u32 proxy_port)
+{
+    if (chip_id != T6050)
+        return;
+    for (u32 idx = 0; idx < USB_IODEV_COUNT; idx++) {
+        struct usb_drd_regs usb_regs;
+        if (idx == proxy_port)
+            continue;
+        if (usb_drd_get_regs(idx, &usb_regs) < 0)
+            continue;
+        /*
+         * Exactly the sequence checked over the proxy on J714c: the port
+         * brought up as for the proxy (power, usb2phy, pipe handler, dwc3
+         * in device mode), then the usb2phy host bits, the gadget stopped,
+         * a core soft reset and the port capability set to host. The next
+         * stage drives the xHCI registers only.
+         */
+        if (usb_phy_bringup(idx) < 0 || !usb_iodev_bringup(idx)) {
+            printf("USB%u: bringup for host mode failed\n", idx);
+            continue;
+        }
+        write32(usb_regs.atc + USB2PHY_SIG, 0x01c1000f | USB2PHY_SIG_HOST);
+        clear32(usb_regs.drd_regs + DWC3_DCTL, DWC3_DCTL_RUN_STOP);
+        poll32(usb_regs.drd_regs + DWC3_DSTS, DWC3_DSTS_DEVCTRLHLT, DWC3_DSTS_DEVCTRLHLT, 10000);
+        set32(usb_regs.drd_regs + DWC3_GCTL, DWC3_GCTL_CORESOFTRESET);
+        udelay(10000);
+        mask32(usb_regs.drd_regs + DWC3_GCTL, DWC3_GCTL_PRTCAPDIR(3) | DWC3_GCTL_CORESOFTRESET,
+               DWC3_GCTL_PRTCAPDIR(DWC3_GCTL_PRTCAP_HOST));
+        udelay(10000);
+        /*
+         * Park the PIPE on the dummy PHY the way the kernel PHY driver does
+         * for a USB2-only host: link detection forced off through the pipe
+         * handler overrides (the dummy backend and NATIVE_RESET/POWER_DOWN
+         * are already set by usb_phy_bringup).
+         */
+        clear32(usb_regs.drd_regs_unk3 + 0x04, BIT(1) | BIT(2));
+        set32(usb_regs.drd_regs_unk3 + 0x00, BIT(0) | BIT(2));
+        /* No PHY auto-suspend: the next stage's host reset needs the PHY clocks. */
+        clear32(usb_regs.drd_regs + DWC3_GUSB2PHYCFG(0), DWC3_GUSB2PHYCFG_SUSPHY);
+        clear32(usb_regs.drd_regs + DWC3_GUSB3PIPECTL(0), DWC3_GUSB3PIPECTL_SUSPHY);
+        printf("USB%u: left in USB 2.0 host mode for the next stage (GCTL %#x)\n", idx,
+               read32(usb_regs.drd_regs + DWC3_GCTL));
+    }
+}
+
 void usb_iodev_shutdown(void)
 {
     for (int i = FIRST_USB_IODEV; i < USB_IODEV_COUNT; i++) {
