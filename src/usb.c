@@ -441,7 +441,8 @@ static u32 t6050_portsc0(struct usb_drd_regs *usb_regs)
     return read32(usb_regs->drd_regs + 0x420);
 }
 
-static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs, dwc3_dev_t **devp, u32 *ms)
+static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs, dwc3_dev_t **devp, u32 *ms,
+                                u32 wait_ms)
 {
     /*
      * Exactly the sequence checked over the proxy on J714c: the port
@@ -475,7 +476,7 @@ static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs, dwc3_dev
     clear32(usb_regs->drd_regs + DWC3_GUSB2PHYCFG(0), DWC3_GUSB2PHYCFG_SUSPHY);
     clear32(usb_regs->drd_regs + DWC3_GUSB3PIPECTL(0), DWC3_GUSB3PIPECTL_SUSPHY);
     /* A plugged device shows up as PORTSC.CCS within a few ms of the flip. */
-    for (*ms = 0; *ms < 300; (*ms)++) {
+    for (*ms = 0; *ms < wait_ms; (*ms)++) {
         if (t6050_portsc0(usb_regs) & 1)
             return true;
         udelay(1000);
@@ -495,14 +496,16 @@ void usb_t6050_host_prep(void)
         u32 attempts = 0, ms = 0;
         bool connected = false;
         /*
-         * The flip loses the connection now and then; the retry tells how
-         * often. A port without a device stays in host mode after the last
-         * attempt.
+         * Measured on J714c: the first flip never shows a plugged device
+         * (not within 1.5 s either), the second cycle of shutdown, bring-up
+         * and flip shows it at once. So the first window is short, the
+         * later ones give a slow device 100 ms. A port without a device
+         * stays in host mode after the last attempt.
          */
         while (attempts < 3 && !connected) {
             dwc3_dev_t *dev;
             attempts++;
-            connected = usb_t6050_host_flip(idx, &usb_regs, &dev, &ms);
+            connected = usb_t6050_host_flip(idx, &usb_regs, &dev, &ms, attempts == 1 ? 50 : 100);
             if (!connected && attempts < 3 && dev)
                 usb_dwc3_shutdown(dev);
         }
