@@ -441,7 +441,7 @@ static u32 t6050_portsc0(struct usb_drd_regs *usb_regs)
     return read32(usb_regs->drd_regs + 0x420);
 }
 
-static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs)
+static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs, dwc3_dev_t **devp)
 {
     /*
      * Exactly the sequence checked over the proxy on J714c: the port
@@ -450,8 +450,8 @@ static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs)
      * a core soft reset and the port capability set to host. The next
      * stage drives the xHCI registers only.
      */
-    dwc3_dev_t *dev;
-    if (usb_phy_bringup(idx) < 0 || !(dev = usb_iodev_bringup(idx))) {
+    *devp = NULL;
+    if (usb_phy_bringup(idx) < 0 || !(*devp = usb_iodev_bringup(idx))) {
         printf("USB%u: bringup for host mode failed\n", idx);
         return false;
     }
@@ -480,7 +480,6 @@ static bool usb_t6050_host_flip(u32 idx, struct usb_drd_regs *usb_regs)
             return true;
         udelay(1000);
     }
-    usb_dwc3_shutdown(dev);
     return false;
 }
 
@@ -496,10 +495,17 @@ void usb_t6050_host_prep(u32 proxy_port)
             continue;
         u32 attempts = 0;
         bool connected = false;
-        /* The flip loses the connection now and then; the retry tells how often. */
+        /*
+         * The flip loses the connection now and then; the retry tells how
+         * often. A port without a device stays in host mode after the last
+         * attempt.
+         */
         while (attempts < 3 && !connected) {
+            dwc3_dev_t *dev;
             attempts++;
-            connected = usb_t6050_host_flip(idx, &usb_regs);
+            connected = usb_t6050_host_flip(idx, &usb_regs, &dev);
+            if (!connected && attempts < 3 && dev)
+                usb_dwc3_shutdown(dev);
         }
         t6050_prep_rec[idx][0] = attempts;
         t6050_prep_rec[idx][1] = t6050_portsc0(&usb_regs);
