@@ -454,6 +454,13 @@ int payload_run(void)
                 printf("Failed to kboot set %s\n", var + 7);
         }
 
+#ifdef ESP_STAGE2
+        /* T6050: stage 1 left the ANS session live; the next stage (U-Boot) adopts it. */
+        if (chip_id == T6050 && nvme_adopt_live_session && !boot_spec &&
+            kboot_set_chosen("asahi,nvme-adopt", "live-rtkit-v1") < 0)
+            printf("Failed to kboot set asahi,nvme-adopt\n");
+#endif
+
         if (kboot_prepare_dt(fdt)) {
             printf("Failed to prepare FDT!\n");
             goto boot_failed;
