@@ -19,22 +19,36 @@
 #define ISP_VER_T8122 0xf1001
 #define ISP_VER_T603X 0xf3001
 #define ISP_VER_T8140 0x110000
+#define ISP_VER_T6050 0x110003
+
+struct isp_domain {
+    const char *name;
+    u32 offset;
+};
 
 // Global PMGR PS slots from the T8140 ADT. These are virtual device entries,
 // so the generic PMGR recursion enables their real parents but skips these slots.
-static const struct {
-    const char *name;
-    u32 offset;
-} isp_t8140_domains[] = {
+static const struct isp_domain isp_t8140_domains[] = {
     {"ISP_CPU", 0x4000},
     {"ISP_CPU_CORE0", 0x4008},
     {"ISP_CPU_CORE1", 0x4010},
     {"ISP_FE", 0x4018},
 };
 
-// Candidate heap limit; requires hardware validation.
+// The T6050 ADT marks ISP_CPU (220) and ISP_FE (221) no_ps, but their slots follow ISP_SYS (218,
+// +0x3a0) in the ISP's reg[1] PMGR window by device id, 8 bytes apart. Measured on J714c: both
+// reach active from the AP and the ISP then reports its version.
+static const struct isp_domain isp_t6050_domains[] = {
+    {"ISP_CPU", 0x3b0},
+    {"ISP_FE", 0x3b8},
+};
+
+// Candidate heap limits; require hardware validation. T6050 uses T8140's heap size above
+// its own measured segment end.
 #define ISP_T8140_HEAP_TOP 0x2200000
 #define ISP_T8140_SEG_END  0x21ec000
+#define ISP_T6050_HEAP_TOP 0x2000000
+#define ISP_T6050_SEG_END  0x1fec000
 
 // PMGR offset to enable to get the version info to work
 #define ISP_PMGR_T8103 0x4018
@@ -86,6 +100,11 @@ int isp_init(void)
 {
     int err = -1;
     bool t8140 = chip_id == T8140;
+    bool t6050 = chip_id == T6050;
+    // Both run the H17 firmware iBoot leaves resident, with ISP sub-domains outside the ADT PS table.
+    bool h17 = t8140 || t6050;
+    const struct isp_domain *domains = t6050 ? isp_t6050_domains : isp_t8140_domains;
+    unsigned int domain_count = t6050 ? ARRAY_SIZE(isp_t6050_domains) : ARRAY_SIZE(isp_t8140_domains);
     bool powered = false;
     unsigned int local_powered = 0;
     unsigned int global_attempted = 0;
@@ -116,7 +135,7 @@ int isp_init(void)
     if (node < 0 || isp_node < 0)
         return 0;
 
-    if (!t8140) {
+    if (!h17) {
         u32 segments_len = 0;
         const struct adt_segment_ranges *segments =
             adt_getprop(adt, isp_node, "segment-ranges", &segments_len);
@@ -127,9 +146,9 @@ int isp_init(void)
         }
     }
 
-    powered = !t8140;
+    powered = !h17;
     reason = "ISP ADT power gates failed";
-    if ((t8140 ? pmgr_adt_power_enable_traced_saved(isp_path, &adt_modes)
+    if ((h17 ? pmgr_adt_power_enable_traced_saved(isp_path, &adt_modes)
                : pmgr_adt_power_enable(isp_path)) < 0)
         goto out;
     powered = true;
@@ -141,13 +160,13 @@ int isp_init(void)
         isp_size < ISP_ASC_VERSION + sizeof(u32) || isp_base > UINT64_MAX - isp_size)
         goto out;
 
-    if (t8140) {
+    if (h17) {
         u64 global_size, local_base, local_size;
-        reason = "invalid T8140 PMGR apertures";
+        reason = t6050 ? "invalid T6050 PMGR apertures" : "invalid T8140 PMGR apertures";
         err = -1;
         if (adt_get_reg(adt, adt_isp_path, "reg", 1, &global_base, &global_size) ||
             adt_get_reg(adt, adt_isp_path, "reg", 2, &local_base, &local_size) ||
-            global_size < 0x18000 || local_size != 0x4000 ||
+            global_size < (t6050 ? 0x3c0 : 0x18000) || local_size != 0x4000 ||
             global_base > UINT64_MAX - global_size || local_base > UINT64_MAX - local_size ||
             local_base < global_base + global_size)
             goto out;
@@ -157,15 +176,15 @@ int isp_init(void)
         // The ADT's ISP_CPU, CORE0, CORE1 and FE slots belong to the global PMGR.
         // Start with CPU: the old sequence started at CORE0 and timed out there.
         // The separate local aperture has no ADT-described PS slot for these devices.
-        for (unsigned int i = 0; i < ARRAY_SIZE(isp_t8140_domains); i++) {
+        for (unsigned int i = 0; i < domain_count; i++) {
             reason = "global ISP PMGR power failed";
             global_attempted++;
-            uintptr_t addr = global_base + isp_t8140_domains[i].offset;
+            uintptr_t addr = global_base + domains[i].offset;
             u32 original = read32(addr);
             global_actual[i] = (original >> 4) & 0xf;
             global_target[i] = original & 0xf;
             int ret = pmgr_set_mode(addr, PMGR_PS_ACTIVE);
-            printf("isp: %s power on at 0x%lx: 0x%x%s\n", isp_t8140_domains[i].name, addr,
+            printf("isp: %s power on at 0x%lx: 0x%x%s\n", domains[i].name, addr,
                    read32(addr), ret ? " failed" : "");
             if (ret)
                 goto out;
@@ -195,6 +214,7 @@ int isp_init(void)
             pmgr_off = ISP_PMGR_T6031;
             break;
         case T8140:
+        case T6050:
             pmgr_off = 0;
             break;
         default:
@@ -202,7 +222,7 @@ int isp_init(void)
             goto out;
     }
 
-    if (!t8140) {
+    if (!h17) {
         reason = "local PMGR power failed";
         local_powered = 1;
         if (pmgr_set_mode(pmgr_base + pmgr_off, PMGR_PS_ACTIVE))
@@ -213,6 +233,10 @@ int isp_init(void)
     printf("isp: Version 0x%x\n", ver_rev);
     if (t8140 && ver_rev != ISP_VER_T8140) {
         reason = "unexpected T8140 revision";
+        goto out;
+    }
+    if (t6050 && ver_rev != ISP_VER_T6050) {
+        reason = "unexpected T6050 revision";
         goto out;
     }
 
@@ -283,6 +307,14 @@ int isp_init(void)
             }
             selected_top = ISP_T8140_HEAP_TOP;
             break;
+        case ISP_VER_T6050:
+            /* iBoot's T6050 firmware version is not in m1n1's table yet: gate on the segment end. */
+            if (!t6050) {
+                reason = "unsupported T6050 SoC";
+                goto out;
+            }
+            selected_top = ISP_T6050_HEAP_TOP;
+            break;
         default:
             reason = "unknown revision";
             goto out;
@@ -312,11 +344,14 @@ int isp_init(void)
     reason = "unmeasured T8140 segment end";
     if (t8140 && selected_iova != ISP_T8140_SEG_END)
         goto out;
+    reason = "unmeasured T6050 segment end";
+    if (t6050 && selected_iova != ISP_T6050_SEG_END)
+        goto out;
     reason = "heap top at or below segment end";
     if (selected_iova >= selected_top)
         goto out;
     selected_size = selected_top - selected_iova;
-    if (t8140) {
+    if (h17) {
         reason = "ISP DAPF initialization failed";
         if (dapf_init(dart_path, 5) < 0)
             goto out;
@@ -342,7 +377,7 @@ int isp_init(void)
     heap_size = selected_size;
     heap_phys = selected_phys;
     isp_initialized = true;
-    if (t8140)
+    if (h17)
         return 0; // Resident H17 ISP stays powered for the Linux handoff.
     err = 0;
 
@@ -352,14 +387,14 @@ out:
                os_firmware.string ? os_firmware.string : "unknown", selected_iova, reason);
     while (global_attempted) {
         unsigned int i = --global_attempted;
-        uintptr_t addr = global_base + isp_t8140_domains[i].offset;
+        uintptr_t addr = global_base + domains[i].offset;
         int ret = pmgr_set_mode(addr, global_target[i]);
-        printf("isp: %s restore at 0x%lx from %x/%x: 0x%x%s\n", isp_t8140_domains[i].name, addr,
+        printf("isp: %s restore at 0x%lx from %x/%x: 0x%x%s\n", domains[i].name, addr,
                global_actual[i], global_target[i], read32(addr), ret ? " failed" : "");
     }
     if (local_powered)
         pmgr_set_mode(pmgr_base + pmgr_off, PMGR_PS_PWRGATE);
     if (powered)
-        t8140 ? pmgr_restore_modes(&adt_modes) : pmgr_adt_power_disable(isp_path);
+        h17 ? pmgr_restore_modes(&adt_modes) : pmgr_adt_power_disable(isp_path);
     return err;
 }
