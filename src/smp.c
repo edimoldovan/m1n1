@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: MIT */
 
 #include "smp.h"
+#include <stdarg.h>
+#include "vsprintf.h"
 #include "adt.h"
 #include "aic.h"
 #include "aic_regs.h"
@@ -187,6 +189,23 @@ static int smp_write_relay(u64 locked, const u32 *code, size_t words)
  * tags as ours) in RAM below this image and outside the CTRR window is
  * rewritten, once; kboot keeps its page from the OS.
  */
+/* Core-start decisions, handed to the OS as /chosen/asahi,smp-debug */
+char smp_debug[1024];
+static size_t smp_debug_len;
+
+static void smp_note(const char *fmt, ...)
+{
+    va_list ap;
+
+    if (smp_debug_len >= sizeof(smp_debug) - 1)
+        return;
+    va_start(ap, fmt);
+    int n = vsnprintf(smp_debug + smp_debug_len, sizeof(smp_debug) - smp_debug_len, fmt, ap);
+    va_end(ap);
+    if (n > 0)
+        smp_debug_len = min(smp_debug_len + n, sizeof(smp_debug) - 1);
+}
+
 static int smp_prepare_rvbar_t6050(u64 locked, u64 target)
 {
     const u32 relay[4] = {0x58000050, 0xd61f0200, (u32)target, (u32)(target >> 32)};
@@ -195,12 +214,12 @@ static int smp_prepare_rvbar_t6050(u64 locked, u64 target)
     if (installed_relay) {
         if (installed_relay == locked && !memcmp((void *)locked, relay, sizeof(relay)))
             return 0;
-        printf("SMP: RVBAR 0x%lx differs from the relay at 0x%lx; refusing start\n", locked,
+        smp_note("SMP: RVBAR 0x%lx differs from the relay at 0x%lx; refusing start; ", locked,
                installed_relay);
         return -1;
     }
     if (!in_el2()) {
-        printf("SMP: RVBAR 0x%lx differs from vector 0x%lx; refusing start\n", locked, target);
+        smp_note("SMP: RVBAR 0x%lx differs from vector 0x%lx; refusing start; ", locked, target);
         return -1;
     }
 
@@ -208,18 +227,23 @@ static int smp_prepare_rvbar_t6050(u64 locked, u64 target)
     u64 ro_end = ALIGN_UP(mrs(SYS_IMP_APL_CTRR_C_UPR_EL1), SZ_4K);
     if (page < cur_boot_args.phys_base || page + SZ_16K > (u64)_base ||
         (page < ro_end && page + SZ_16K > ro_start)) {
-        printf("SMP: RVBAR 0x%lx is not RAM below this image; refusing start\n", locked);
+        smp_note("SMP: RVBAR 0x%lx is not RAM below this image; refusing start; ", locked);
         return -1;
     }
-    for (u64 off = 0; off <= 0x180; off += 0x80) {
+    /*
+     * A stage 1 enrolled as a Mach-O object (kmutil wraps even a raw image) can have iBoot lock
+     * RVBAR to the object's header, 64 KiB below the image this stage 2 now runs at.
+     */
+    bool macho_header = locked + 0x10000 == (u64)_base && read32(locked) == 0xfeedfacf;
+    for (u64 off = 0; !macho_header && off <= 0x180; off += 0x80) {
         if (read32(locked + off) != read32((u64)_vectors_start + off)) {
-            printf("SMP: RVBAR 0x%lx is not a retired m1n1 vector table\n", locked);
+            smp_note("SMP: RVBAR 0x%lx is not a retired m1n1 vector table; ", locked);
             return -1;
         }
     }
     if (smp_write_relay(locked, relay, ARRAY_SIZE(relay)))
         return -1;
-    printf("SMP: installed RVBAR relay at 0x%lx -> 0x%lx\n", locked, target);
+    smp_note("SMP: installed RVBAR relay at 0x%lx -> 0x%lx; ", locked, target);
     return 0;
 }
 
@@ -233,6 +257,12 @@ static int smp_prepare_rvbar(const struct cpu_info *cpu)
     u64 rvbar = read64(cpu->impl_reg);
     u64 locked = rvbar & RVBAR_ADDR;
     u64 target = (u64)_vectors_start;
+
+    if (!smp_debug_len)
+        smp_note("rvbar 0x%lx target 0x%lx base 0x%lx relocated_from 0x%lx unlocked %d phys_base 0x%lx "
+                 "ctrr 0x%lx-0x%lx; ", rvbar, target, (u64)_base, relocated_from,
+                 cpu_features->apple_sysregs_unlocked, cur_boot_args.phys_base,
+                 mrs(SYS_IMP_APL_CTRR_C_LWR_EL1), mrs(SYS_IMP_APL_CTRR_C_UPR_EL1));
 
     if (locked == target || cpu_features->apple_sysregs_unlocked)
         return 0;
@@ -438,7 +468,10 @@ static int smp_start_cpu(int index, const struct cpu_info *cpu)
 
     if (i >= 100) {
         printf("Failed!\n");
+        smp_note("cpu%d fail stack 0x%lx rvbar 0x%lx; ", index,
+                 (u64)secondary_stacks[index] + SECONDARY_STACK_SIZE, read64(cpu->impl_reg));
     } else {
+        smp_note("cpu%d ok; ", index);
         printf("  Started.\n");
     }
 

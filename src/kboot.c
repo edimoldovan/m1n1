@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "kboot.h"
+#include "cpu_regs.h"
 #include "adt.h"
 #include "asc.h"
 #include "assert.h"
@@ -421,6 +422,46 @@ static int dt_set_chosen(void)
 
     if (fdt_setprop(dt, node, "asahi,m1n1-stage2-version", m1n1_version, strlen(m1n1_version) + 1))
         bail("FDT: couldn't set asahi,m1n1-stage2-version\n");
+    /*
+     * A padded Mach-O stage 1 makes iBoot arm CTXR_D, the window the secondaries can execute in,
+     * from below this image to well above it. Hand the OS a 2 MiB aligned 128 MiB region of it
+     * above a 16 MiB slot for m1n1, as aura does (aura src/ctxr_exec.c): U-Boot loads the kernel
+     * there and the kernel keeps all its code in it (CONFIG_ARM64_CTXR_EXECMEM).
+     */
+    if (chip_id == T6050 && in_el2()) {
+        u64 lower = mrs(SYS_IMP_APL_CTXR_D_LWR_EL1);
+        u64 armed_end = ALIGN_DOWN(mrs(SYS_IMP_APL_CTXR_D_UPR_EL1) + SZ_4K, SZ_16K);
+        u64 start = ALIGN_UP((u64)_base + 16 * SZ_1M, 2 * SZ_1M);
+        u64 end = start + 128 * SZ_1M;
+        char why[160] = "";
+
+        if (!lower || armed_end <= lower)
+            snprintf(why, sizeof(why), "CTXR_D not armed");
+        else if ((u64)_base < lower || (u64)_end > start)
+            snprintf(why, sizeof(why), "m1n1 0x%lx-0x%lx not in CTXR_D 0x%lx-0x%lx and its slot",
+                     (u64)_base, (u64)_end, lower, armed_end);
+        else if (armed_end < end)
+            snprintf(why, sizeof(why), "CTXR_D 0x%lx-0x%lx too small for 0x%lx-0x%lx", lower,
+                     armed_end, start, end);
+        else if (cur_boot_args.top_of_kernel_data < end)
+            snprintf(why, sizeof(why), "heap 0x%lx starts inside 0x%lx-0x%lx",
+                     cur_boot_args.top_of_kernel_data, start, end);
+        if (why[0]) {
+            printf("CTXR exec: no window: %s\n", why);
+            fdt_setprop_string(dt, node, "asahi,ctxr-debug", why);
+        } else {
+            fdt64_t win[2] = {cpu_to_fdt64(start), cpu_to_fdt64(end - start)};
+            if (fdt_setprop(dt, node, "aurora,ctxr-exec-window", win, sizeof(win)))
+                bail("FDT: couldn't set aurora,ctxr-exec-window\n");
+            printf("FDT: CTXR exec window base 0x%lx size 0x%lx\n", start, end - start);
+        }
+    }
+
+    {
+        extern char smp_debug[];
+        if (smp_debug[0])
+            fdt_setprop_string(dt, node, "asahi,smp-debug", smp_debug);
+    }
 
     if (adt) {
         int anode = adt_path_offset(adt, "/chosen");
